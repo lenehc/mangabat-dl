@@ -11,8 +11,7 @@ from typing import (
 
 class Plugin(Interface):
     def __init__(self) -> None:
-        self.url = 'https://h.mangabat.com'
-        self.search_url = urljoin(self.url, '/search/manga/{}')
+        self.name = 'MangaBat'
 
     def search(self, term: str) -> List[Manga]:
         term = re.sub(r'(?<=[a-zA-Z0-9])[^a-zA-Z0-9]+(?=[a-zA-Z0-9])', '_', term)
@@ -21,7 +20,7 @@ class Plugin(Interface):
         if term == '':
             return []
 
-        request = requests.get(self.search_url.format(term))
+        request = requests.get(f'https://h.mangabat.com/search/manga/{term}')
         soup = BeautifulSoup(request.content, 'html.parser')
         root = soup.find('div', class_='panel-list-story')
 
@@ -66,27 +65,26 @@ class Plugin(Interface):
                 name = re.split(r'\s*:\s*', name_data, maxsplit=1)
                 name = name[1] if len(name) > 1 else None
 
-                chapters.append(Chapter(url, num, name))
+                chapters.append(Chapter(manga, url, num, name))
 
         return chapters
 
-    def download_chapter(self, chapter: Chapter, download_dir: str) -> None:
+    def fetch_chapter_images(self, chapter: Chapter) -> List:
         if not chapter.url:
-            raise RuntimeError
+            return []
 
         request = requests.get(chapter.url)
         soup = BeautifulSoup(request.content, 'html.parser')
         root = soup.find('div', class_='container-chapter-reader')
 
+        binary_images = []
+
         if root:
-            os.chdir(download_dir)
 
             image_urls = [i.get('src') for i in root.find_all_next('img', class_='img-content')]
             headers = {'Referer': 'https://www.readmangabat.com'}
             
             for idx, url in enumerate(image_urls):
-                image_data = requests.get(url, headers=headers).content
-                with open(f'{str(idx+1).zfill(3)}.jpg', 'wb') as f:
-                    f.write(image_data)
-        else:
-            raise RuntimeError
+                binary_images.append(requests.get(url, headers=headers).content)
+
+        return binary_images
