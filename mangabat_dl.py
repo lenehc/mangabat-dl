@@ -3,8 +3,7 @@ import requests
 import os
 import sys
 import re
-
-from bs4 import BeautifulSoup
+import zipfile
 
 from InquirerPy.utils import get_style
 from InquirerPy.base.control import Choice
@@ -18,11 +17,14 @@ from prompt_toolkit.validation import Validator
 from prompt_toolkit.styles import Style
 from prompt_toolkit.formatted_text import FormattedText
 
+from urllib.parse import urlparse
+from bs4 import BeautifulSoup
 from typing import (
     List,
     Tuple,
     Optional,
     Union,
+    Callable,
 )
 
 
@@ -70,6 +72,11 @@ FUZZY_KEYBINDINGS = {
 }
 MARGIN = '  '
 MANDATORY_MESSAGE = MARGIN + 'This field is required'
+WIDTH, _ = os.get_terminal_size()
+
+SANITIZE_FILENAME = lambda x: os.path.basename(x)
+ABSOLUTE_PATH = lambda x: os.path.abspath(os.path.expanduser(x))
+IMAGE_FILENAME = lambda idx, ext: f'{str(idx+1).zfill(3)}{ext if ext else ".jpg"}'
 
 
 class _InquirerPyFuzzyControl(InquirerPyFuzzyControl):
@@ -85,7 +92,7 @@ class _InquirerPyFuzzyControl(InquirerPyFuzzyControl):
             )
         )
         display_choices.append(("[SetCursorPosition]", ""))
-        display_choices.append(("class:pointer", choice["name"]))
+        display_choices.append(("class:pointer", choice["name"].ljust(WIDTH)))
         return display_choices
 
 
@@ -102,7 +109,7 @@ class _InquirerPyListControl(InquirerPyListControl):
             )
         )
         display_choices.append(("[SetCursorPosition]", ""))
-        display_choices.append(("class:pointer", choice["name"]))
+        display_choices.append(("class:pointer", choice["name"].ljust(WIDTH)))
         return display_choices
 
 
@@ -110,7 +117,7 @@ InquirerPy.prompts.list.InquirerPyListControl = _InquirerPyListControl
 InquirerPy.prompts.fuzzy.InquirerPyFuzzyControl = _InquirerPyFuzzyControl
 
 
-class Fuzzy(FuzzyPrompt):
+class _FuzzyPrompt(FuzzyPrompt):
     def _generate_after_input(self) -> List[Tuple[str, str]]:
         display_message = []
 
@@ -186,7 +193,7 @@ class Interface:
 
         return chapters
 
-    def fetch_chapter_images(self, chapter: Chapter) -> List[bytes]:
+    def fetch_chapter_images(self, chapter: Chapter) -> List[Tuple[bytes, str]]:
         if not chapter.url:
             return []
 
@@ -202,13 +209,15 @@ class Interface:
             headers = {'Referer': 'https://www.readmangabat.com'}
             
             for url in image_urls:
-                binary_images.append(requests.get(url, headers=headers).content)
+                path = urlparse(url).path
+                ext = os.path.splitext(path)[1]
+                binary_images.append((requests.get(url, headers=headers).content, ext))
 
         return binary_images
   
 
 class UI:
-    def _fmt_selected_items(self, items: List[Chapter]) -> str:
+    def _fmt_selected_items(self, items: List[str]) -> str:
         fmt_string = f'\n{MARGIN}' + f'\n{MARGIN}'.join(items[:10])
 
         if len(items) > 10:
@@ -216,95 +225,64 @@ class UI:
 
         return fmt_string
     
-    def _full_just_items(self, items: List[Union[Choice, str]]) -> List[Union[Choice, str]]:
-        width, _ = os.get_terminal_size()
-        full_just = lambda x: x.ljust(width-2)
-        fmt_items = []
-
-        for item in items:
-            if type(item) == Choice:
-                fmt_line = full_just(item.name)
-                fmt_items.append(Choice(name=fmt_line, value=item.value, enabled=item.enabled))
-            else:
-                fmt_items.append(full_just(item))
-        
-        return fmt_items
-
     def select(self, items: List[Union[Choice, str]], title: str, item_count_singular: str, item_count_plural: str, message: Optional[str] = None) -> ListPrompt:
         return ListPrompt(
             message=message if message else title,
-            choices=self._full_just_items(items),
-            transformer=lambda x: f'\n{MARGIN}{x}',
-            show_cursor=False,
-            mandatory_message=MANDATORY_MESSAGE,
-            long_instruction=MARGIN + self.fmt_count_str(len(items), item_count_singular, item_count_plural),
+            choices=items,
             style=STYLE,
             qmark=' ',
             amark=' ',
             pointer='',
+            long_instruction=MARGIN + self.fmt_count(len(items), item_count_singular, item_count_plural),
+            transformer=lambda x: f'\n{MARGIN}{x}',
             border=True,
+            show_cursor=False,
             cycle=False,
+            mandatory_message=MANDATORY_MESSAGE,
         )
     
-    def fuzzy(self, items: List[Union[Choice, str]], title: str, item_count_singular: str, item_count_plural: str) -> Fuzzy:
-        return Fuzzy(
-            prompt='',
-            multiselect=True,
-            marker='✔ ',
-            marker_pl='  ',
+    def fuzzy(self, items: List[Union[Choice, str]], title: str, item_count_singular: str, item_count_plural: str) -> _FuzzyPrompt:
+        return _FuzzyPrompt(
             message=title,
-            choices=self._full_just_items(items),
-            transformer=self._fmt_selected_items,
-            mandatory_message=MANDATORY_MESSAGE,
-            long_instruction=MARGIN + self.fmt_count_str(len(items), item_count_singular, item_count_plural),
+            choices=items,
+            pointer='',
             style=STYLE,
             qmark=' ',
             amark=' ',
-            pointer='',
+            transformer=self._fmt_selected_items,
+            long_instruction=MARGIN + self.fmt_count(len(items), item_count_singular, item_count_plural),
+            multiselect=True,
+            prompt='',
+            marker='✔ ',
+            marker_pl='  ',
             border=True,
+            mandatory_message=MANDATORY_MESSAGE,
             cycle=False,
             keybindings=FUZZY_KEYBINDINGS,
         )
 
-    def text(self, title: str, validate: Optional[Validator] = None) -> InputPrompt:
+    def text(self, title: str) -> InputPrompt:
         return InputPrompt(
-            style=STYLE,
             message=MARGIN + title,
+            style=STYLE,
             qmark='',
             amark='',
+            validate=EmptyInputValidator(message=MANDATORY_MESSAGE),
             mandatory_message=MANDATORY_MESSAGE,
-            validate=validate if validate else EmptyInputValidator(message=MANDATORY_MESSAGE),
         )
 
-    def fmt_count_str(self, count: int, name_singular: str, name_plural: str) -> str:
+    def fmt_count(self, count: int, name_singular: str, name_plural: str) -> str:
         name_str = name_singular if count == 1 else name_plural
         return f'{count if count else "No"} {name_str}'
 
-    def fmt_count_match(self, count: int) -> str:
-        return self.fmt_count_str(count, 'match', 'matches')
-
-    def fmt_count_result(self, count: int) -> str:
-        return self.fmt_count_str(count, 'result', 'results')
-
-    def fmt_count_chapter(self, count: int) -> str:
-        return self.fmt_count_str(count, 'chapter', 'chapters')
-
-    def clear_line(self) -> str:
+    def clear_line(self) -> None:
         print('\x1b[2K', end='\r')
 
-    def hide_cursor(self) -> str:
+    def hide_cursor(self) -> None:
         print('\033[?25l', end='\r')
 
-    def show_cursor(self) -> str:
+    def show_cursor(self) -> None:
         print('\033[?25h', end='\r')
-    
-    def print_status(self, status: str, new_line_before: bool = True, ellipsis: bool = True) -> str:
-        new_line = '\n' if new_line_before else ''
-
-        self.print([('extra_faded', f'{new_line}{MARGIN}{status}{"..." if ellipsis else ""}')],  margin=False, end='\r')
-    
-    def print_error(self, error: str) -> None:
-        self.print([('extra_faded', error)])
 
     def print(self, items: List[Tuple[str, str]], clear_line: bool = True, hide_cursor: bool = True, margin: bool = True, **kwargs) -> None:
         if hide_cursor:
@@ -319,141 +297,194 @@ class UI:
                 **kwargs,
             )
 
+    def print_status(self, status: str, new_line_before: bool = True, ellipsis: bool = True) -> str:
+        new_line = '\n' if new_line_before else ''
+        line = f'{new_line}{MARGIN}{status}{"..." if ellipsis else ""}'
 
-def main():
-    interface = Interface()
-    ui = UI()
-
-    full_path = lambda x: os.path.abspath(os.path.expanduser(x))
-    args = sys.argv[1:]
-    download_dir = full_path('.')
-
-    if len(args) == 1:
-        download_dir = args[0]
-
-        if not os.path.isdir(download_dir):
-            ui.print_error('Invalid path')
-            return
-
-        download_dir = full_path(download_dir)
-
-    ui.clear_line()
-
-    search_term = ui.text(
-        title='Search',
-    ).execute()
+        self.print([('extra_faded', line)], margin=False, end='\r')
     
-    ui.print_status('Fetching results')
+    def print_error(self, error: str) -> None:
+        self.print([('extra_faded', error)])
 
-    mangas = []
 
-    for manga in interface.search(search_term):
-        mangas.append(Choice(value=manga, name=manga.title))
+class Main:
+    def __init__(self) -> None:
+        self.interface = Interface()
+        self.ui = UI()
+        self.download_path = ABSOLUTE_PATH('.')
+        self.download_formats = [
+            {'ext': '.zip', 'name': 'ZIP', 'method': self.download_as_archive},
+            {'ext': '.cbz', 'name': 'CBZ', 'method': self.download_as_archive},
+            {'ext': '.jpg', 'name': 'JPEG', 'method': self.download_as_images},
+        ]
+
+        args = sys.argv[1:]
+
+        if len(args) == 1:
+            path = args[0]
+
+            if not os.path.isdir(path):
+                self.ui.print_error('Invalid path')
+                self.exit()
+
+            self.download_path = ABSOLUTE_PATH(path)
     
-    ui.clear_line()
+    def exit(self) -> None:
+        self.ui.clear_line()
+        self.ui.show_cursor()
+        sys.exit(1)
 
-    if not mangas:
-        ui.print_error('No results found')
-        return
-
-    selected_manga = ui.select(
-        title='Manga',
-        items=mangas,
-        item_count_singular='result',
-        item_count_plural='results',
-    ).execute()
-
-    ui.print_status('Fetching chapters')
-
-    chapters = []
-
-    def fmt_chapter_line(chapter):
+    def _fmt_chapter_line(self, chapter: Chapter) -> str:
         line = []
+        line.append(chapter.chapter.ljust(8))
+        line.append(chapter.title)
+        return '  '.join(line).rstrip()
 
-        if chapter.chapter:
-            line.append(chapter.chapter.ljust(8))
-        else:
-            line.append(''.ljust(8))
-        
-        if chapter.title:
-            line.append(chapter.title)
-        
-        if not line:
-            return ''
-        
-        return '   '.join(line)
-
-
-    for chapter in interface.get_chapters(selected_manga):
-        line = fmt_chapter_line(chapter)
-
-        if not line:
-            continue
-
-        chapters.append(Choice(value=chapter, name=line))
-
-    ui.clear_line()
-
-    if not mangas:
-        ui.print_error('No chapters found')
-        return
-
-    selected_chapters = ui.fuzzy(
-        title='Chapters',
-        items=chapters,
-        item_count_singular='chapter',
-        item_count_plural='chapters',
-    ).execute()
-
-    ui.hide_cursor()
-    print()
-
-    failed_downloads = []
-
-    def download_images(images):
-        for idx, image in enumerate(images):
-            with open(f'{str(idx+1).zfill(3)}.jpg', 'wb') as f:
-                f.write(image)
-
-    for idx, chapter in enumerate(selected_chapters):
-        ui.print_status(f'Downloading {idx+1} of {ui.fmt_count_chapter(len(selected_chapters))}', new_line_before=False)
-
-
+    def _chapter_dirname(self, chapter: Chapter) -> str:
         if chapter.chapter:
             num_split = chapter.chapter.split('.')
-            chapter_dir_name = f'c{num_split[0].zfill(4)}'
+            dirname = f'c{num_split[0].zfill(4)}'
             if len(num_split) > 1:
-                chapter_dir_name += f'{"." + ".".join(num_split[1:])}'
+                dirname += f'{"." + ".".join(num_split[1:])}'
         else:
-            chapter_dir_name = chapter.title
+            dirname = chapter.title
 
-        images = interface.fetch_chapter_images(chapter)
+        return SANITIZE_FILENAME(dirname)
 
-        if not images:
-            failed_downloads.append(chapter)
-        else:
-            local_download_dir = os.path.join(download_dir, chapter.manga.title, os.path.basename(chapter_dir_name))
+    def download_as_archive(self, chapters: List[Chapter], ext: str, on_each: Optional[Callable[[int], None]] = lambda x: None) -> None:
+        os.chdir(self.download_path)
 
-            os.makedirs(local_download_dir, exist_ok=True)
-            os.chdir(local_download_dir)
+        arcname = SANITIZE_FILENAME(chapters[0].manga.title) + ext
+        failed_downloads = []
 
-            download_images(images)
+        if os.path.exists(arcname):
+            name, _ = os.path.splitext(arcname)
+            i = 1
+
+            while os.path.exists(f"{name} ({i}){ext}"):
+                i += 1
+            
+            arcname = f'{name} ({i}){ext}'
+
+        for idx, chapter in enumerate(chapters):
+            on_each(idx)
+
+            images = self.interface.fetch_chapter_images(chapter)
+
+            if not images:
+                failed_downloads.append(chapter)
+                continue
+
+            with zipfile.ZipFile(arcname, 'a') as archive:
+                for idx, (image, ext) in enumerate(images):
+                    archive.writestr(os.path.join(self._chapter_dirname(chapter), IMAGE_FILENAME(idx, ext)), image)
+        
+        return failed_downloads
+
+    def download_as_images(self, chapters: List[Chapter], ext: str, on_each: Optional[Callable[[int], None]] = lambda x: None) -> None:
+        failed_downloads = []
+
+        for idx, chapter in enumerate(chapters):
+            on_each(idx)
+
+            images = self.interface.fetch_chapter_images(chapter)
+
+            if not images:
+                failed_downloads.append(chapter)
+                continue
+
+            local_download_path = os.path.join(self.download_path, SANITIZE_FILENAME(chapter.manga.title), self._chapter_dirname(chapter))
+
+            os.makedirs(local_download_path, exist_ok=True)
+            os.chdir(local_download_path)
+
+            for idx, (image, ext) in enumerate(images):
+                with open(IMAGE_FILENAME(idx, ext), 'wb') as f:
+                    f.write(image)
+        
+        return failed_downloads
     
-    if failed_downloads:
-        ui.print([('faded', 'Failed')])
-        for chapter in failed_downloads:
-            ui.print([('', fmt_chapter_line(chapter))])
+    def run(self) -> None:
+        search_term = self.ui.text(
+            title='Search',
+        ).execute()
+        
+        self.ui.print_status('Fetching results')
+
+        mangas = []
+
+        for manga in self.interface.search(search_term):
+            mangas.append(Choice(manga, manga.title))
+        
+        self.ui.clear_line()
+
+        if not mangas:
+            self.ui.print_error('No results found')
+            self.exit()
+
+        selected_manga = self.ui.select(
+            title='Manga',
+            items=mangas,
+            item_count_singular='result',
+            item_count_plural='results',
+        ).execute()
+
+        self.ui.print_status('Fetching chapters')
+
+        chapters = []
+
+        for chapter in self.interface.get_chapters(selected_manga):
+            line = self._fmt_chapter_line(chapter)
+            if line:
+                chapters.append(Choice(chapter, line))
+
+        self.ui.clear_line()
+
+        if not mangas:
+            self.ui.print_error('No chapters found')
+            self.exit()
+
+        selected_chapters = self.ui.fuzzy(
+            title='Chapters',
+            items=chapters,
+            item_count_singular='chapter',
+            item_count_plural='chapters',
+        ).execute()
+
+        self.ui.hide_cursor()
         print()
 
-    download_count = len(selected_chapters)-len(failed_downloads)
-    ui.print_status(f'Downloaded {download_count} of {ui.fmt_count_chapter(len(selected_chapters))}', new_line_before=False, ellipsis=False)
+        selected_format = self.ui.select(
+            title='Format',
+            items=[Choice(format, format['name']) for format in self.download_formats],
+            item_count_singular='format',
+            item_count_plural='formats',
+        ).execute()
 
-    print()
+        print()
+
+        chapter_count = self.ui.fmt_count(len(selected_chapters), "chapter", "chapters")
+        on_chapter_download = lambda idx: self.ui.print_status(f'Downloading {idx+1} of {chapter_count}', new_line_before=False)
+        failed_downloads = selected_format['method'](selected_chapters, selected_format['ext'], on_chapter_download)
+
+        if failed_downloads:
+            ui.print([('faded', 'Failed')])
+
+            for chapter in failed_downloads:
+                ui.print([('', self._fmt_chapter_line(chapter))])
+
+            print()
+
+        download_count = len(selected_chapters)-len(failed_downloads)
+
+        self.ui.print_status(f'Downloaded {download_count} of {chapter_count}', new_line_before=False, ellipsis=False)
+
+        print()
 
 
 if __name__ == "__main__":
     try:
-        main()
+        Main().run()
     except KeyboardInterrupt:
         pass
     finally:
