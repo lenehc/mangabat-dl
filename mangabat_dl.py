@@ -48,6 +48,26 @@ STYLE = get_style(
     }, 
     style_override=False
 )
+FUZZY_KEYBINDINGS = {
+    'down': [
+        {'key': 'down'},
+    ],
+    'up': [
+        {'key': 'up'},
+    ],
+    'toggle': [
+        {'key': 'tab'},
+    ],
+    'toggle-down': [],
+    'toggle-up': [],
+    'toggle-all': [
+        {'key': 'c-r'},
+    ],
+    'toggle-all-true': [
+        {'key': 'c-a'},
+    ],
+    'toggle-all-false': [],
+}
 MARGIN = '  '
 MANDATORY_MESSAGE = MARGIN + 'This field is required'
 
@@ -243,6 +263,7 @@ class UI:
             pointer='',
             border=True,
             cycle=False,
+            keybindings=FUZZY_KEYBINDINGS,
         )
 
     def text(self, title: str, validate: Optional[Validator] = None) -> InputPrompt:
