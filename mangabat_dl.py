@@ -13,7 +13,6 @@ from InquirerPy.prompts.fuzzy import FuzzyPrompt, InquirerPyFuzzyControl
 from InquirerPy.prompts.list import ListPrompt, InquirerPyListControl
 
 from prompt_toolkit import print_formatted_text
-from prompt_toolkit.validation import Validator
 from prompt_toolkit.styles import Style
 from prompt_toolkit.formatted_text import FormattedText
 
