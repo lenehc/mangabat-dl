@@ -1,6 +1,6 @@
 Usage: mangabat_dl.py [download path]
 
-Keybings for chapter selection:
+Keybindings for chapter selection:
   Select: <Tab>
   Select all: <C-a>
   Inverse selection: <C-r>
