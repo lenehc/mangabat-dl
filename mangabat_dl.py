@@ -236,7 +236,6 @@ class UI:
             transformer=lambda x: f'\n{MARGIN}{x}',
             border=True,
             show_cursor=False,
-            cycle=False,
             mandatory_message=MANDATORY_MESSAGE,
         )
     
@@ -256,7 +255,6 @@ class UI:
             marker_pl='  ',
             border=True,
             mandatory_message=MANDATORY_MESSAGE,
-            cycle=False,
             keybindings=FUZZY_KEYBINDINGS,
         )
 
